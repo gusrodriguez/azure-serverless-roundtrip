@@ -1,2 +1,2 @@
 config:
-  azure-round-trip:prefix: azrt
+  azure-serverless-roundtrip:prefix: azrt

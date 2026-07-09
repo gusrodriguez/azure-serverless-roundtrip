@@ -1,6 +1,21 @@
-# azure-round-trip
+# azure-serverless-roundtrip
 
-A complete, deployable reference architecture on Azure demonstrating an end-to-end serverless event-driven flow. The goal is to showcase infrastructure-as-code, messaging, distributed tracing, and cost-conscious architecture choices — not application complexity.
+A complete, deployable reference architecture on Azure demonstrating an end-to-end serverless event-driven flow — the **serverless** counterpart to [`gcp-kubernetes-roundtrip`](https://github.com/gusrodriguez/gcp-kubernetes-roundtrip). Both repos implement the same architectural pattern (HTTP → message broker → async consumer → database, with correlation IDs, DLQ handling, and observability) but with opposite infrastructure philosophies. The goal is to showcase infrastructure-as-code, messaging, distributed tracing, and cost-conscious architecture choices — not application complexity.
+
+### Serverless vs Serverfull at a Glance
+
+|                        | azure-serverless-roundtrip (this repo) | [gcp-kubernetes-roundtrip](https://github.com/gusrodriguez/gcp-kubernetes-roundtrip) |
+|------------------------|-------------------------------------|--------------------------------------|
+| Compute                | Azure Functions (pay-per-invocation)| Kubernetes pods (long-running)       |
+| Message broker         | Service Bus (managed)               | NATS JetStream (self-hosted)         |
+| Database               | Cosmos DB (managed)                 | Postgres StatefulSet (self-hosted)   |
+| Dead-letter queue      | Built-in (one config flag)          | Built from primitives (advisories)   |
+| Observability          | Application Insights (automatic)    | Prometheus + Grafana (manual)        |
+| Connection pooling     | N/A (cold starts per invocation)    | Long-lived pools (serverfull luxury) |
+| CI end-to-end test     | Requires live Azure resources       | Fully local in kind (zero cost)      |
+| Infrastructure-as-code | Pulumi → Azure                      | Pulumi → GCP                         |
+| External API           | HTTP triggers (REST)                | GraphQL (graphql-yoga)               |
+| Internal communication | Service Bus queue trigger           | gRPC + NATS pub/sub                  |
 
 ```mermaid
 graph LR
@@ -34,7 +49,9 @@ graph LR
 
 ### Service Bus vs Storage Queues
 
-Storage Queues are simpler and cheaper (included with every storage account), but Service Bus provides: dead-letter queues, `maxDeliveryCount`, message sessions, and richer metadata. For a reference architecture that demonstrates production messaging patterns, Service Bus is the right choice. We use the **Basic tier** ($0.05/13M operations) since we only need queues, not topics.
+Storage Queues are simpler and cheaper (included with every storage account), but Service Bus provides: dead-letter queues, `maxDeliveryCount`, message sessions, and richer metadata. For a reference architecture that demonstrates production messaging patterns, Service Bus is the right choice. We use the **Basic tier** ($0.05/13M operations) since we only need a single queue with one consumer.
+
+If you needed multiple subscribers reacting to the same message — e.g. one function writes to Cosmos DB while another sends a notification email — you'd switch from a **queue** to a **topic with subscriptions**. Each subscription receives its own copy of the message, enabling fan-out. This requires upgrading to **Standard tier** ($10/month base).
 
 ### Consumption vs Premium plan
 
@@ -60,9 +77,17 @@ Returning 202 decouples the HTTP response from the processing time. The client k
 ### DLQ strategy
 
 Service Bus is configured with `maxDeliveryCount: 5` and `deadLetteringOnMessageExpiration: true`. If the Process function throws 5 times on the same message, it lands in the dead-letter sub-queue (`tasks/$deadletterqueue`). In production you would:
-1. Set up an alert on DLQ depth via Application Insights or Azure Monitor.
-2. Build a small utility function or script to inspect/resubmit dead-letter messages.
-3. Log the full exception + message body on the final failure so you can diagnose without re-processing.
+1. Build a small utility function or script to inspect/resubmit dead-letter messages.
+2. Log the full exception + message body on the final failure so you can diagnose without re-processing.
+
+### DLQ alerting
+
+A growing dead-letter queue is a strong signal that the consumer function is failing or down. The recommended alerting approach:
+
+1. **Grafana** with the Azure Monitor data source — create a dashboard panel that queries the DLQ message count (`ActiveMessageCount` on the `tasks/$deadletterqueue` sub-queue). Set an alert rule that fires when the count exceeds a threshold (e.g., > 0 for immediate awareness, or > 10 for noisy environments).
+2. **Azure Monitor** as a simpler alternative — create a metric alert on the Service Bus namespace, filtering on `DeadLetteredMessages` for the `tasks` queue. This doesn't require Grafana but has less flexible dashboarding.
+
+Either way, a non-zero DLQ depth should trigger an investigation: check the Process function's Application Insights logs for exceptions, verify the function is running (check the Consumption plan for cold-start issues or deployment failures), and inspect the dead-letter messages themselves for malformed payloads.
 
 ### OIDC federation over publish profiles
 
@@ -86,7 +111,7 @@ The Submit function captures `context.traceContext.traceParent` and sets it as t
 1. **Create an Azure AD app registration** for OIDC:
 
    ```bash
-   az ad app create --display-name "azure-round-trip-github"
+   az ad app create --display-name "azure-serverless-roundtrip-github"
    ```
 
    Note the `appId` from the output.
@@ -107,7 +132,7 @@ The Submit function captures `context.traceContext.traceParent` and sets it as t
    az ad app federated-credential create --id <appId> --parameters '{
      "name": "github-main",
      "issuer": "https://token.actions.githubusercontent.com",
-     "subject": "repo:<owner>/azure-round-trip:ref:refs/heads/main",
+     "subject": "repo:<owner>/azure-serverless-roundtrip:ref:refs/heads/main",
      "audiences": ["api://AzureADTokenExchange"]
    }'
    ```
@@ -222,7 +247,7 @@ This runs Vitest tests in the `api` workspace covering input validation, message
 ## Repo structure
 
 ```
-azure-round-trip/
+azure-serverless-roundtrip/
 ├── api/                        # Azure Functions (TypeScript, v4 model)
 │   ├── src/
 │   │   ├── functions/          # submit, items, process
