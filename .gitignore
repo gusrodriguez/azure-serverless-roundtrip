@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.pulumi/
+*.js.map
+local.settings.json
+.env
+.env.*
+!.env.example
+staticwebapp.config.json

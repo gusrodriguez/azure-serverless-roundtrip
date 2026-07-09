@@ -1,0 +1,132 @@
+name: Build & Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write # Required for OIDC federation with Azure
+  contents: read
+
+env:
+  NODE_VERSION: "20"
+  PULUMI_STACK: dev
+
+jobs:
+  build-and-test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build API
+        run: npm run build --workspace=api
+
+      - name: Test API
+        run: npm run test --workspace=api
+
+      - name: Build frontend
+        run: npm run build --workspace=frontend
+
+      - name: Upload API artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-dist
+          path: |
+            api/dist/
+            api/host.json
+            api/package.json
+            api/node_modules/
+
+      - name: Upload frontend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist/
+
+  deploy-infra:
+    name: Deploy Infrastructure
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    outputs:
+      function-app-name: ${{ steps.pulumi.outputs.functionAppName }}
+      static-web-app-name: ${{ steps.pulumi.outputs.staticWebAppName }}
+      resource-group: ${{ steps.pulumi.outputs.resourceGroupName }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install infra dependencies
+        run: npm ci --workspace=infra
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - uses: pulumi/actions@v5
+        id: pulumi
+        with:
+          command: up
+          stack-name: ${{ env.PULUMI_STACK }}
+          work-dir: infra
+        env:
+          PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
+
+  deploy-functions:
+    name: Deploy Function App
+    needs: [build-and-test, deploy-infra]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download API artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: api-dist
+          path: api/
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy to Azure Functions
+        uses: azure/functions-action@v1
+        with:
+          app-name: ${{ needs.deploy-infra.outputs.function-app-name }}
+          package: api/
+
+  deploy-frontend:
+    name: Deploy Static Web App
+    needs: [build-and-test, deploy-infra]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download frontend artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist/
+
+      - name: Deploy to Azure Static Web Apps
+        uses: azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
+          action: upload
+          app_location: frontend/dist
+          skip_app_build: true
+          skip_api_build: true

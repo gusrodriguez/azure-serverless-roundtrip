@@ -1,0 +1,9 @@
+name: azure-round-trip
+runtime:
+  name: nodejs
+  options:
+    typescript: true
+description: Azure serverless round-trip reference architecture
+config:
+  azure-native:location:
+    default: westeurope

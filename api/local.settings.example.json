@@ -1,0 +1,13 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "node",
+    "SERVICE_BUS_CONNECTION": "<your-service-bus-connection-string>",
+    "SERVICE_BUS_QUEUE_NAME": "tasks",
+    "COSMOS_ENDPOINT": "https://localhost:8081",
+    "COSMOS_KEY": "<your-cosmos-key-or-emulator-key>",
+    "COSMOS_DATABASE": "round-trip-db",
+    "COSMOS_CONTAINER": "items"
+  }
+}

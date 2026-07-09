@@ -1,0 +1,16 @@
+{
+  "name": "azure-round-trip",
+  "private": true,
+  "workspaces": [
+    "api",
+    "frontend",
+    "infra"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "test": "npm run test --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
