@@ -5,17 +5,17 @@ A complete, deployable reference architecture on Azure demonstrating an end-to-e
 ### Serverless vs Serverfull at a Glance
 
 |                        | azure-serverless-roundtrip (this repo) | [gcp-kubernetes-roundtrip](https://github.com/gusrodriguez/gcp-kubernetes-roundtrip) |
-|------------------------|-------------------------------------|--------------------------------------|
-| Compute                | Azure Functions (pay-per-invocation)| Kubernetes pods (long-running)       |
-| Message broker         | Service Bus (managed)               | NATS JetStream (self-hosted)         |
-| Database               | Cosmos DB (managed)                 | Postgres StatefulSet (self-hosted)   |
-| Dead-letter queue      | Built-in (one config flag)          | Built from primitives (advisories)   |
-| Observability          | Application Insights (automatic)    | Prometheus + Grafana (manual)        |
-| Connection pooling     | N/A (cold starts per invocation)    | Long-lived pools (serverfull luxury) |
-| CI end-to-end test     | Requires live Azure resources       | Fully local in kind (zero cost)      |
-| Infrastructure-as-code | Pulumi → Azure                      | Pulumi → GCP                         |
-| External API           | HTTP triggers (REST)                | GraphQL (graphql-yoga)               |
-| Internal communication | Service Bus queue trigger           | gRPC + NATS pub/sub                  |
+| ---------------------- | -------------------------------------- | ------------------------------------------------------------------------------------ |
+| Compute                | Azure Functions (pay-per-invocation)   | Kubernetes pods (long-running)                                                       |
+| Message broker         | Service Bus (managed)                  | NATS JetStream (self-hosted)                                                         |
+| Database               | Cosmos DB (managed)                    | Postgres StatefulSet (self-hosted)                                                   |
+| Dead-letter queue      | Built-in (one config flag)             | Built from primitives (advisories)                                                   |
+| Observability          | Application Insights (automatic)       | Prometheus + Grafana (manual)                                                        |
+| Connection pooling     | N/A (cold starts per invocation)       | Long-lived pools (serverfull luxury)                                                 |
+| CI end-to-end test     | Requires live Azure resources          | Fully local in kind (zero cost)                                                      |
+| Infrastructure-as-code | Pulumi → Azure                         | Pulumi → GCP                                                                         |
+| External API           | HTTP triggers (REST)                   | GraphQL (graphql-yoga)                                                               |
+| Internal communication | Service Bus queue trigger              | gRPC + NATS pub/sub                                                                  |
 
 ```mermaid
 graph LR
@@ -30,72 +30,62 @@ graph LR
     G -.->|traces| F
 ```
 
-## The flow, step by step
+## The round trip
 
-1. User fills in a task (title + optional payload) in the React frontend and clicks Submit.
-2. The **Submit function** validates the input (Zod), generates a `correlationId` (UUID v4) and timestamp, publishes an enriched message to the Service Bus queue, and returns `202 Accepted` with the correlation ID.
-3. The **Process function** is triggered by the Service Bus message. It builds a `ProcessedItem`, upserts it into Cosmos DB (keyed by `correlationId` for idempotency), and emits telemetry events.
-4. The frontend polls **GET /api/items** every 3 seconds. The **Items function** queries Cosmos DB for the most recent processed items and returns them.
-5. The user sees their task appear in the "Processed Items" list — the full round trip is complete.
+Submit a task and the response is a `202 Accepted` with a correlation ID; the message travels HTTP → Service Bus → queue trigger → Cosmos DB, and the frontend picks it up by polling `GET /api/items`:
 
-**What to look for in Application Insights:**
+```bash
+curl -s -X POST https://<your-swa>.azurestaticapps.net/api/submit \
+  -H 'Content-Type: application/json' \
+  -d '{"title": "hello", "payload": {"n": 42}}'
+# → 202 { "correlationId": "9f6c2e1a-...", "status": "accepted" }
+```
 
-- Open the **Transaction search** or **End-to-end transaction details** view.
-- Search by correlation ID. You should see a single operation spanning: HTTP request → Service Bus publish → queue trigger → Cosmos DB write.
-- Custom events at each hop: `TaskSubmitted`, `TaskProcessing`, `TaskPersisted`.
-- The `Diagnostic-Id` application property on the Service Bus message links the HTTP trace context to the consumer trace context.
+### Tracing it in Application Insights
+
+Once deployed, open **End-to-end transaction details** and search by the correlation ID. The whole round trip shows up as a **single distributed operation** — HTTP request → Service Bus publish → queue trigger → Cosmos DB write — stitched together via the `Diagnostic-Id` application property on the Service Bus message ([`api/src/lib/telemetry.ts`](api/src/lib/telemetry.ts)). Custom events mark each hop: `TaskSubmitted` → `TaskProcessing` → `TaskPersisted`.
 
 ## Design decisions
 
-### Service Bus vs Storage Queues
+### Service Bus vs Storage Queues — [`infra/service-bus.ts`](infra/service-bus.ts)
 
-Storage Queues are simpler and cheaper (included with every storage account), but Service Bus provides: dead-letter queues, `maxDeliveryCount`, message sessions, and richer metadata. For a reference architecture that demonstrates production messaging patterns, Service Bus is the right choice. We use the **Basic tier** ($0.05/13M operations) since we only need a single queue with one consumer.
+Storage Queues are simpler and cheaper (included with every storage account), but Service Bus provides dead-letter queues, `maxDeliveryCount`, message sessions, and richer metadata.
 
-If you needed multiple subscribers reacting to the same message — e.g. one function writes to Cosmos DB while another sends a notification email — you'd switch from a **queue** to a **topic with subscriptions**. Each subscription receives its own copy of the message, enabling fan-out. This requires upgrading to **Standard tier** ($10/month base).
+### Consumption vs Premium plan — [`infra/functions.ts`](infra/functions.ts)
 
-### Consumption vs Premium plan
+The Function App runs on the **Consumption (Y1)** plan: first 1M executions and 400K GB-seconds/month free. The trade-off is cold starts.
 
-The Function App runs on the **Consumption (Y1)** plan: the first 1M executions and 400K GB-seconds per month are free. Cold starts are the trade-off — the first invocation after idle may take 1-2 seconds. For a reference project this is acceptable. You'd switch to **Premium (EP1)** if you need: always-warm instances, VNet integration, or predictable latency under load.
+### Cosmos DB: provisioned free tier vs serverless — [`infra/cosmos.ts`](infra/cosmos.ts)
 
-### Cosmos DB: provisioned free tier vs serverless
-
-We use `enableFreeTier: true` with 400 RU/s provisioned throughput (out of the free tier's 1000 RU/s allowance). This makes the database effectively zero-cost forever. Serverless Cosmos charges per RU consumed with no monthly free grant — it can be cheaper for very sporadic traffic but doesn't benefit from the free tier discount. One free-tier account is allowed per Azure subscription.
+`enableFreeTier: true` with 400 RU/s provisioned (out of the free tier's 1000 RU/s allowance) makes the database effectively zero-cost forever. Serverless Cosmos charges per RU with no monthly free grant.
 
 ### Partition key: `/id`
 
-The document `id` is the `correlationId`. This gives us:
-- Efficient point reads and upserts (every write is a single-partition operation).
-- High cardinality for even data distribution.
-- Cross-partition queries for listing items are fine at this scale (low volume, 400 RU/s is plenty).
+The document `id` is the `correlationId`: single-partition point writes, high cardinality for even distribution, and cross-partition list queries that are fine at this scale.
 
-At high scale, you'd add a time-based partition key (e.g., `/yearMonth`) to co-locate items for time-range queries.
+### 202 Accepted + polling
 
-### 202 Accepted + polling vs synchronous processing
+Decouples the HTTP response from processing time — standard for event-driven flows. The queue absorbs retries; the consumer scales independently.
 
-Returning 202 decouples the HTTP response from the processing time. The client knows the request was accepted immediately. This pattern is standard for event-driven architectures: it prevents the HTTP call from timing out if processing is slow, enables retries via the queue, and lets you scale the consumer independently.
+### DLQ handling — [`infra/service-bus.ts`](infra/service-bus.ts) + [`tools/dlq-inspect.ts`](tools/dlq-inspect.ts)
 
-### DLQ strategy
+`maxDeliveryCount: 5` and `deadLetteringOnMessageExpiration: true`: if the Process function throws 5 times on the same message, it lands in `tasks/$deadletterqueue`. The repo includes a working CLI to inspect and resubmit dead-lettered messages:
 
-Service Bus is configured with `maxDeliveryCount: 5` and `deadLetteringOnMessageExpiration: true`. If the Process function throws 5 times on the same message, it lands in the dead-letter sub-queue (`tasks/$deadletterqueue`). In production you would:
-1. Build a small utility function or script to inspect/resubmit dead-letter messages.
-2. Log the full exception + message body on the final failure so you can diagnose without re-processing.
+```bash
+npx tsx tools/dlq-inspect.ts list              # peek DLQ contents + failure reasons
+npx tsx tools/dlq-inspect.ts resubmit          # move messages back to the main queue
+npx tsx tools/dlq-inspect.ts resubmit --limit 5 --dry-run
+```
 
-### DLQ alerting
+For alerting, create an Azure Monitor metric alert on `DeadLetteredMessages`.
 
-A growing dead-letter queue is a strong signal that the consumer function is failing or down. The recommended alerting approach:
+### OIDC federation over publish profiles — [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)
 
-1. **Grafana** with the Azure Monitor data source — create a dashboard panel that queries the DLQ message count (`ActiveMessageCount` on the `tasks/$deadletterqueue` sub-queue). Set an alert rule that fires when the count exceeds a threshold (e.g., > 0 for immediate awareness, or > 10 for noisy environments).
-2. **Azure Monitor** as a simpler alternative — create a metric alert on the Service Bus namespace, filtering on `DeadLetteredMessages` for the `tasks` queue. This doesn't require Grafana but has less flexible dashboarding.
+`azure/login` with OIDC federation (federated credentials on an Azure AD app registration): the token is issued per-workflow-run, scoped to repo + branch. No long-lived secrets in GitHub to leak or rotate.
 
-Either way, a non-zero DLQ depth should trigger an investigation: check the Process function's Application Insights logs for exceptions, verify the function is running (check the Consumption plan for cold-start issues or deployment failures), and inspect the dead-letter messages themselves for malformed payloads.
+### Correlation propagation — [`api/src/lib/telemetry.ts`](api/src/lib/telemetry.ts)
 
-### OIDC federation over publish profiles
-
-The GitHub Actions workflow uses `azure/login` with OIDC federation (federated credentials on an Azure AD app registration). This avoids storing long-lived secrets in GitHub: the token is issued per-workflow-run and scoped to the specific repo + branch. Publish profiles are simpler to set up but are static secrets that can leak and are harder to rotate.
-
-### Correlation propagation
-
-The Submit function captures `context.traceContext.traceParent` and sets it as the `Diagnostic-Id` application property on the Service Bus message. The Azure Functions runtime and Application Insights SDK use this to link the producer and consumer traces into a single distributed operation.
+The Submit function captures `context.traceContext.traceParent` and sets it as the `Diagnostic-Id` application property on the Service Bus message. The Functions runtime and App Insights SDK use it to link producer and consumer traces into a single distributed operation.
 
 ## Deploy your own
 
@@ -139,17 +129,17 @@ The Submit function captures `context.traceContext.traceParent` and sets it as t
 
 4. **Set GitHub repository variables** (Settings → Secrets and variables → Actions → Variables):
 
-   | Variable | Value |
-   |---|---|
-   | `AZURE_CLIENT_ID` | The app registration `appId` |
-   | `AZURE_TENANT_ID` | Your Azure AD tenant ID |
-   | `AZURE_SUBSCRIPTION_ID` | Your Azure subscription ID |
+   | Variable                | Value                        |
+   | ----------------------- | ---------------------------- |
+   | `AZURE_CLIENT_ID`       | The app registration `appId` |
+   | `AZURE_TENANT_ID`       | Your Azure AD tenant ID      |
+   | `AZURE_SUBSCRIPTION_ID` | Your Azure subscription ID   |
 
 5. **Set GitHub repository secrets**:
 
-   | Secret | Value |
-   |---|---|
-   | `PULUMI_ACCESS_TOKEN` | Your Pulumi access token |
+   | Secret                            | Value                                               |
+   | --------------------------------- | --------------------------------------------------- |
+   | `PULUMI_ACCESS_TOKEN`             | Your Pulumi access token                            |
    | `AZURE_STATIC_WEB_APPS_API_TOKEN` | From the Static Web App resource after first deploy |
 
 6. **Initialize the Pulumi stack**:
@@ -166,15 +156,15 @@ Push to `main`. The GitHub Actions workflow will: build & test → deploy infras
 
 ### Cost
 
-| Resource | Cost |
-|---|---|
-| Azure Functions (Consumption) | Free (1M executions/month) |
-| Cosmos DB (Free tier, 400 RU/s) | Free (1000 RU/s + 25 GB included) |
-| Static Web App (Free tier) | Free |
-| Application Insights | Free (up to 5 GB/month ingestion) |
-| Log Analytics | Free (up to 5 GB/month) |
-| Storage Account | ~$0.01/month |
-| **Service Bus (Basic)** | **~$0.05/month** (the only non-free component) |
+| Resource                        | Cost                                           |
+| ------------------------------- | ---------------------------------------------- |
+| Azure Functions (Consumption)   | Free (1M executions/month)                     |
+| Cosmos DB (Free tier, 400 RU/s) | Free (1000 RU/s + 25 GB included)              |
+| Static Web App (Free tier)      | Free                                           |
+| Application Insights            | Free (up to 5 GB/month ingestion)              |
+| Log Analytics                   | Free (up to 5 GB/month)                        |
+| Storage Account                 | ~$0.01/month                                   |
+| **Service Bus (Basic)**         | **~$0.05/month** (the only non-free component) |
 
 Set a budget alert at $1/month in the Azure portal (Cost Management → Budgets) so there are no surprises.
 
@@ -193,8 +183,8 @@ This removes the resource group and all resources inside it. Verify in the Azure
 
 - [Azure Functions Core Tools v4](https://learn.microsoft.com/en-us/azure/azure-functions/functions-run-local)
 - [Azurite](https://learn.microsoft.com/en-us/azure/storage/common/storage-use-azurite) (for local storage emulation)
-- A deployed Service Bus namespace (no local emulator exists — the Basic tier costs cents)
-- Cosmos DB: either the [emulator](https://learn.microsoft.com/en-us/azure/cosmos-db/emulator) or connect to your deployed free-tier instance
+- A Service Bus namespace. A [Docker-based emulator](https://learn.microsoft.com/en-us/azure/service-bus-messaging/test-locally-with-service-bus-emulator) exists if you want fully local dev; this repo assumes a deployed namespace, since the Basic tier costs cents and it's what CI targets anyway.
+- Cosmos DB: either the [emulator](https://learn.microsoft.com/en-us/azure/cosmos-db/emulator) or a deployed free-tier instance.
 
 ### Setup
 
@@ -271,6 +261,8 @@ azure-serverless-roundtrip/
 │   ├── functions.ts            # App Service Plan + Function App
 │   ├── static-web-app.ts
 │   └── index.ts                # Stack outputs
+├── tools/
+│   └── dlq-inspect.ts          # Inspect & resubmit dead-lettered messages
 └── .github/workflows/
     └── deploy.yml              # CI/CD with OIDC auth
 ```
