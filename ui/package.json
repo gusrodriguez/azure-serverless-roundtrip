@@ -1,5 +1,5 @@
 {
-  "name": "frontend",
+  "name": "ui",
   "private": true,
   "type": "module",
   "scripts": {

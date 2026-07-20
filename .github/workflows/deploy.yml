@@ -33,8 +33,8 @@ jobs:
       - name: Test API
         run: npm run test --workspace=api
 
-      - name: Build frontend
-        run: npm run build --workspace=frontend
+      - name: Build UI
+        run: npm run build --workspace=ui
 
       - name: Upload API artifact
         uses: actions/upload-artifact@v4
@@ -46,11 +46,11 @@ jobs:
             api/package.json
             api/node_modules/
 
-      - name: Upload frontend artifact
+      - name: Upload UI artifact
         uses: actions/upload-artifact@v4
         with:
-          name: frontend-dist
-          path: frontend/dist/
+          name: ui-dist
+          path: ui/dist/
 
   deploy-infra:
     name: Deploy Infrastructure
@@ -111,22 +111,22 @@ jobs:
           app-name: ${{ needs.deploy-infra.outputs.function-app-name }}
           package: api/
 
-  deploy-frontend:
+  deploy-ui:
     name: Deploy Static Web App
     needs: [build-and-test, deploy-infra]
     runs-on: ubuntu-latest
     steps:
-      - name: Download frontend artifact
+      - name: Download UI artifact
         uses: actions/download-artifact@v4
         with:
-          name: frontend-dist
-          path: frontend/dist/
+          name: ui-dist
+          path: ui/dist/
 
       - name: Deploy to Azure Static Web Apps
         uses: azure/static-web-apps-deploy@v1
         with:
           azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
           action: upload
-          app_location: frontend/dist
+          app_location: ui/dist
           skip_app_build: true
           skip_api_build: true

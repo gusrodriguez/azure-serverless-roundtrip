@@ -2,7 +2,7 @@
 
 A complete, deployable reference architecture on Azure demonstrating an end-to-end serverless event-driven flow — the **serverless** counterpart to [`gcp-kubernetes-roundtrip`](https://github.com/gusrodriguez/gcp-kubernetes-roundtrip). Both repos implement the same architectural pattern (HTTP → message broker → async consumer → database, with correlation IDs, DLQ handling, and observability) but with opposite infrastructure philosophies. The goal is to showcase infrastructure-as-code, messaging, distributed tracing, and cost-conscious architecture choices — not application complexity.
 
-### Serverless vs Serverfull at a Glance
+### Serverless vs Containerized at a Glance
 
 |                        | azure-serverless-roundtrip (this repo) | [gcp-kubernetes-roundtrip](https://github.com/gusrodriguez/gcp-kubernetes-roundtrip) |
 | ---------------------- | -------------------------------------- | ------------------------------------------------------------------------------------ |
@@ -32,7 +32,7 @@ graph LR
 
 ## The round trip
 
-Submit a task and the response is a `202 Accepted` with a correlation ID; the message travels HTTP → Service Bus → queue trigger → Cosmos DB, and the frontend picks it up by polling `GET /api/items`:
+Submit a task and the response is a `202 Accepted` with a correlation ID; the message travels HTTP → Service Bus → queue trigger → Cosmos DB, and the UI picks it up by polling `GET /api/items`:
 
 ```bash
 curl -s -X POST https://<your-swa>.azurestaticapps.net/api/submit \
@@ -152,7 +152,7 @@ The Submit function captures `context.traceContext.traceParent` and sets it as t
 
 ### Deploy
 
-Push to `main`. The GitHub Actions workflow will: build & test → deploy infrastructure with Pulumi → deploy the Function App → deploy the frontend.
+Push to `main`. The GitHub Actions workflow will: build & test → deploy infrastructure with Pulumi → deploy the Function App → deploy the UI.
 
 ### Cost
 
@@ -215,10 +215,10 @@ This removes the resource group and all resources inside it. Verify in the Azure
    npm run build && npm start
    ```
 
-6. Start the frontend (in a separate terminal):
+6. Start the UI (in a separate terminal):
 
    ```bash
-   cd frontend
+   cd ui
    npm run dev
    ```
 
@@ -246,7 +246,7 @@ azure-serverless-roundtrip/
 │   ├── host.json
 │   ├── local.settings.example.json
 │   └── vitest.config.ts
-├── frontend/                   # React + Vite (TypeScript)
+├── ui/                         # React + Vite (TypeScript)
 │   ├── src/
 │   │   ├── App.tsx             # Single-page component
 │   │   └── main.tsx

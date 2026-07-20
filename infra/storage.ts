@@ -3,15 +3,7 @@ import * as pulumi from "@pulumi/pulumi";
 import { prefix } from "./config";
 import { resourceGroup } from "./resource-group";
 
-/**
- * Storage account for Azure Functions runtime (AzureWebJobsStorage).
- *
- * SKU: Standard_LRS (Locally Redundant Storage) — the cheapest storage
- * redundancy option. Fine for a dev/reference project where we do not
- * need geo-redundancy or zone-redundancy.
- */
 export const storageAccount = new storage.StorageAccount(`${prefix}store`, {
-  // Storage account names must be 3-24 chars, lowercase alphanumeric only.
   accountName: `${prefix}store`,
   resourceGroupName: resourceGroup.name,
   location: resourceGroup.location,
@@ -21,7 +13,6 @@ export const storageAccount = new storage.StorageAccount(`${prefix}store`, {
   },
 });
 
-/** Primary connection string for the storage account. */
 export const storageConnectionString = pulumi
   .all([resourceGroup.name, storageAccount.name])
   .apply(([rgName, accountName]) =>

@@ -7,3 +7,4 @@ local.settings.json
 .env.*
 !.env.example
 staticwebapp.config.json
+.DS_Store

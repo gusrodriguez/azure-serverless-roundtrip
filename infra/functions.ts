@@ -8,15 +8,6 @@ import { serviceBusConnectionString } from "./service-bus";
 import { cosmosEndpoint, cosmosPrimaryKey } from "./cosmos";
 import { staticWebAppUrl } from "./static-web-app";
 
-/**
- * App Service Plan — Consumption tier (Y1 / Dynamic).
- *
- * The cheapest (effectively free) option for Azure Functions:
- *   - First 1,000,000 executions per month are free.
- *   - 400,000 GB-seconds of compute per month are free.
- *   - You only pay for what you use beyond the free grant.
- *   - Cold starts are the trade-off, but acceptable for a reference project.
- */
 export const appServicePlan = new web.AppServicePlan(`${prefix}-plan`, {
   name: `${prefix}-plan`,
   resourceGroupName: resourceGroup.name,
@@ -28,12 +19,6 @@ export const appServicePlan = new web.AppServicePlan(`${prefix}-plan`, {
   },
 });
 
-/**
- * Function App — Node.js 20 runtime on Azure Functions v4.
- *
- * All secrets/connection strings flow from Pulumi outputs.
- * Nothing is hardcoded.
- */
 export const functionApp = new web.WebApp(`${prefix}-func`, {
   name: `${prefix}-func`,
   resourceGroupName: resourceGroup.name,
@@ -97,8 +82,6 @@ export const functionApp = new web.WebApp(`${prefix}-func`, {
   httpsOnly: true,
 });
 
-/** The name of the deployed Function App resource. */
 export const functionAppName = functionApp.name;
 
-/** The default hostname (e.g. azrt-func.azurewebsites.net). */
 export const functionAppHostname = functionApp.defaultHostName;
