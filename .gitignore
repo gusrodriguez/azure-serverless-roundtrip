@@ -1,5 +1,6 @@
 node_modules/
 dist/
+.yarn/*
 .pulumi/
 *.js.map
 local.settings.json

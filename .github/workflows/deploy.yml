@@ -20,21 +20,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - run: corepack enable
+
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
+          cache: yarn
 
-      - run: npm ci
+      - run: yarn install --immutable
 
       - name: Build API
-        run: npm run build --workspace=api
+        run: yarn workspace api build
 
       - name: Test API
-        run: npm run test --workspace=api
+        run: yarn workspace api test
 
       - name: Build UI
-        run: npm run build --workspace=ui
+        run: yarn workspace ui build
 
       - name: Upload API artifact
         uses: actions/upload-artifact@v4
@@ -63,13 +65,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - run: corepack enable
+
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
+          cache: yarn
 
       - name: Install infra dependencies
-        run: npm ci --workspace=infra
+        run: yarn install --immutable
 
       - name: Azure Login (OIDC)
         uses: azure/login@v2

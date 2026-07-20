@@ -191,7 +191,7 @@ This removes the resource group and all resources inside it. Verify in the Azure
 1. Install dependencies:
 
    ```bash
-   npm install
+   yarn install
    ```
 
 2. Copy the example settings:
@@ -212,14 +212,14 @@ This removes the resource group and all resources inside it. Verify in the Azure
 
    ```bash
    cd api
-   npm run build && npm start
+   yarn build && yarn start
    ```
 
 6. Start the UI (in a separate terminal):
 
    ```bash
    cd ui
-   npm run dev
+   yarn dev
    ```
 
    The Vite dev server proxies `/api` requests to `http://localhost:7071`.
@@ -229,7 +229,7 @@ This removes the resource group and all resources inside it. Verify in the Azure
 ### Running tests
 
 ```bash
-npm test
+yarn test
 ```
 
 This runs Vitest tests in the `api` workspace covering input validation, message shaping, and idempotent upsert logic.

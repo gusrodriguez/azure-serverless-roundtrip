@@ -9,15 +9,15 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@azure/cosmos": "^4.1.0",
     "@azure/functions": "^4.5.0",
     "@azure/service-bus": "^7.9.0",
-    "@azure/cosmos": "^4.1.0",
     "applicationinsights": "^3.3.0",
     "zod": "^3.23.0"
   },
   "devDependencies": {
+    "@types/node": "^20.0.0",
     "typescript": "^5.4.0",
-    "vitest": "^2.0.0",
-    "@types/node": "^20.0.0"
+    "vitest": "^2.0.0"
   }
 }

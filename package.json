@@ -7,9 +7,10 @@
     "infra"
   ],
   "scripts": {
-    "build": "npm run build --workspaces",
-    "test": "npm run test --workspaces --if-present"
+    "build": "yarn workspaces foreach -A run build",
+    "test": "yarn workspaces foreach -A run test"
   },
+  "packageManager": "yarn@4.17.0",
   "engines": {
     "node": ">=20"
   }
