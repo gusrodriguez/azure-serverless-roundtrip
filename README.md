@@ -4,7 +4,9 @@ A complete, deployable reference architecture on Azure demonstrating an end-to-e
 
 Its counterpart, [`gcp-kubernetes-roundtrip`](https://github.com/gusrodriguez/gcp-kubernetes-roundtrip), implements the same architectural pattern using a different infrastructure philosophy.
 
-The goal is to showcase infrastructure as code, messaging, distributed tracing, and cost-conscious architectural decisions rather than application complexity.
+The goal is to showcase fully managed serverless components, including Azure Functions, Service Bus, Cosmos DB, and Application Insights. 
+This shifts server management, capacity allocation, scaling, and maintenance to the platform, reducing operational overhead. Usage-based pricing minimizes idle costs but makes spending dependent on workload volume. 
+Other trade-offs include cold starts, platform-specific constraints, and less control over runtime behavior and the underlying infrastructure.
 
 ### Serverless vs Containerized at a Glance
 
