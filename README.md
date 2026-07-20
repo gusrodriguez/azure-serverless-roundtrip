@@ -1,6 +1,10 @@
 # azure-serverless-roundtrip
 
-A complete, deployable reference architecture on Azure demonstrating an end-to-end serverless event-driven flow — the **serverless** counterpart to [`gcp-kubernetes-roundtrip`](https://github.com/gusrodriguez/gcp-kubernetes-roundtrip). Both repos implement the same architectural pattern (HTTP → message broker → async consumer → database, with correlation IDs, DLQ handling, and observability) but with opposite infrastructure philosophies. The goal is to showcase infrastructure-as-code, messaging, distributed tracing, and cost-conscious architecture choices — not application complexity.
+A complete, deployable reference architecture on Azure demonstrating an end-to-end serverless event-driven flow: HTTP request, message broker, asynchronous consumer, and database, with correlation IDs, DLQ handling, and observability.
+
+Its counterpart, [`gcp-kubernetes-roundtrip`](https://github.com/gusrodriguez/gcp-kubernetes-roundtrip), implements the same architectural pattern using a different infrastructure philosophy.
+
+The goal is to showcase infrastructure as code, messaging, distributed tracing, and cost-conscious architectural decisions rather than application complexity.
 
 ### Serverless vs Containerized at a Glance
 
@@ -17,6 +21,17 @@ A complete, deployable reference architecture on Azure demonstrating an end-to-e
 | External API           | HTTP triggers (REST)                   | GraphQL (graphql-yoga)                                                               |
 | Internal communication | Service Bus queue trigger              | gRPC + NATS pub/sub                                                                  |
 
+## The round trip
+
+Submit a task and the response is a `202 Accepted` with a correlation ID; the message travels HTTP → Service Bus → queue trigger → Cosmos DB, and the UI picks it up by polling `GET /api/items`:
+
+```bash
+curl -s -X POST https://<your-swa>.azurestaticapps.net/api/submit \
+  -H 'Content-Type: application/json' \
+  -d '{"title": "hello", "payload": {"n": 42}}'
+# → 202 { "correlationId": "9f6c2e1a-...", "status": "accepted" }
+```
+
 ```mermaid
 graph LR
     A[React Frontend<br/>Static Web App] -->|POST /api/submit| B[Submit Function<br/>HTTP Trigger]
@@ -30,62 +45,55 @@ graph LR
     G -.->|traces| F
 ```
 
-## The round trip
-
-Submit a task and the response is a `202 Accepted` with a correlation ID; the message travels HTTP → Service Bus → queue trigger → Cosmos DB, and the UI picks it up by polling `GET /api/items`:
-
-```bash
-curl -s -X POST https://<your-swa>.azurestaticapps.net/api/submit \
-  -H 'Content-Type: application/json' \
-  -d '{"title": "hello", "payload": {"n": 42}}'
-# → 202 { "correlationId": "9f6c2e1a-...", "status": "accepted" }
-```
-
 ### Tracing it in Application Insights
 
-Once deployed, open **End-to-end transaction details** and search by the correlation ID. The whole round trip shows up as a **single distributed operation** — HTTP request → Service Bus publish → queue trigger → Cosmos DB write — stitched together via the `Diagnostic-Id` application property on the Service Bus message ([`api/src/lib/telemetry.ts`](api/src/lib/telemetry.ts)). Custom events mark each hop: `TaskSubmitted` → `TaskProcessing` → `TaskPersisted`.
+Open **End-to-end transaction details** and search by correlation ID. The flow appears as a single distributed operation: HTTP request → Service Bus publish → queue trigger → Cosmos DB write.
+
+Tracing is propagated through the `Diagnostic-Id` property (`api/src/lib/telemetry.ts`), with custom events for `TaskSubmitted`, `TaskProcessing`, and `TaskPersisted`.
 
 ## Design decisions
 
-### Service Bus vs Storage Queues — [`infra/service-bus.ts`](infra/service-bus.ts)
+### Service Bus vs Storage Queues: [`infra/service-bus.ts`](infra/service-bus.ts)
 
-Storage Queues are simpler and cheaper (included with every storage account), but Service Bus provides dead-letter queues, `maxDeliveryCount`, message sessions, and richer metadata.
+Storage Queues are simpler and cheaper, but Service Bus provides dead-letter queues, `maxDeliveryCount`, message sessions, and application properties.
 
-### Consumption vs Premium plan — [`infra/functions.ts`](infra/functions.ts)
+### Consumption vs Premium plan: [`infra/functions.ts`](infra/functions.ts)
 
-The Function App runs on the **Consumption (Y1)** plan: first 1M executions and 400K GB-seconds/month free. The trade-off is cold starts.
+The Function App runs on the **Consumption (Y1)** plan, which includes 1M executions and 400K GB-seconds per month at no charge. The trade-off is cold starts.
 
-### Cosmos DB: provisioned free tier vs serverless — [`infra/cosmos.ts`](infra/cosmos.ts)
+### Cosmos DB provisioned free tier vs serverless: [`infra/cosmos.ts`](infra/cosmos.ts)
 
-`enableFreeTier: true` with 400 RU/s provisioned (out of the free tier's 1000 RU/s allowance) makes the database effectively zero-cost forever. Serverless Cosmos charges per RU with no monthly free grant.
+`enableFreeTier: true` with 400 RU/s provisioned keeps the database within the free-tier allowance. Serverless Cosmos charges per consumed RU and has no equivalent monthly free grant.
 
 ### Partition key: `/id`
 
-The document `id` is the `correlationId`: single-partition point writes, high cardinality for even distribution, and cross-partition list queries that are fine at this scale.
+The document `id` is the `correlationId`, providing single-partition point writes and high cardinality for even distribution. List queries are cross-partition, which is acceptable at this scale.
 
-### 202 Accepted + polling
+### 202 Accepted with polling
 
-Decouples the HTTP response from processing time — standard for event-driven flows. The queue absorbs retries; the consumer scales independently.
+The API returns before asynchronous processing completes. Service Bus handles delivery retries, while the consumer can scale independently.
 
-### DLQ handling — [`infra/service-bus.ts`](infra/service-bus.ts) + [`tools/dlq-inspect.ts`](tools/dlq-inspect.ts)
+### DLQ handling: [`infra/service-bus.ts`](infra/service-bus.ts) and [`tools/dlq-inspect.ts`](tools/dlq-inspect.ts)
 
-`maxDeliveryCount: 5` and `deadLetteringOnMessageExpiration: true`: if the Process function throws 5 times on the same message, it lands in `tasks/$deadletterqueue`. The repo includes a working CLI to inspect and resubmit dead-lettered messages:
+With `maxDeliveryCount: 5`, a message is moved to `tasks/$deadletterqueue` after five failed processing attempts. Expired messages are also dead-lettered through `deadLetteringOnMessageExpiration: true`.
+
+The included CLI can inspect and resubmit dead-lettered messages:
 
 ```bash
-npx tsx tools/dlq-inspect.ts list              # peek DLQ contents + failure reasons
-npx tsx tools/dlq-inspect.ts resubmit          # move messages back to the main queue
+npx tsx tools/dlq-inspect.ts list
+npx tsx tools/dlq-inspect.ts resubmit
 npx tsx tools/dlq-inspect.ts resubmit --limit 5 --dry-run
 ```
 
-For alerting, create an Azure Monitor metric alert on `DeadLetteredMessages`.
+DLQ growth can be monitored with an Azure Monitor alert on the `DeadLetteredMessages` metric.
 
-### OIDC federation over publish profiles — [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)
+### OIDC federation instead of publish profiles: [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)
 
-`azure/login` with OIDC federation (federated credentials on an Azure AD app registration): the token is issued per-workflow-run, scoped to repo + branch. No long-lived secrets in GitHub to leak or rotate.
+`azure/login` uses OIDC federation with credentials scoped to the repository and branch. Tokens are issued per workflow run, so no long-lived GitHub secrets are required.
 
-### Correlation propagation — [`api/src/lib/telemetry.ts`](api/src/lib/telemetry.ts)
+### Correlation propagation: [`api/src/lib/telemetry.ts`](api/src/lib/telemetry.ts)
 
-The Submit function captures `context.traceContext.traceParent` and sets it as the `Diagnostic-Id` application property on the Service Bus message. The Functions runtime and App Insights SDK use it to link producer and consumer traces into a single distributed operation.
+The Submit function captures `context.traceContext.traceParent` and sends it as the `Diagnostic-Id` application property on the Service Bus message. The Functions runtime and Application Insights use it to link the producer and consumer traces into one distributed operation.
 
 ## Deploy your own
 
@@ -222,17 +230,13 @@ This removes the resource group and all resources inside it. Verify in the Azure
    yarn dev
    ```
 
-   The Vite dev server proxies `/api` requests to `http://localhost:7071`.
-
 7. Open `http://localhost:5173` in your browser.
 
-### Running tests
+### Tests
 
 ```bash
 yarn test
 ```
-
-This runs Vitest tests in the `api` workspace covering input validation, message shaping, and idempotent upsert logic.
 
 ## Repo structure
 
